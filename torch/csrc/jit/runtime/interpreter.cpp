@@ -7,6 +7,7 @@
 #include <c10/util/Exception.h>
 #include <torch/csrc/autograd/edge.h>
 #include <torch/csrc/autograd/grad_mode.h>
+#include <torch/csrc/autograd/profiler.h>
 #include <torch/csrc/autograd/variable.h>
 #include <torch/csrc/jit/api/compilation_unit.h>
 #include <torch/csrc/jit/api/function_impl.h>
@@ -410,6 +411,21 @@ struct WithCurrentNode {
 struct BailoutBlock {
   size_t jf_instruction_index; // this node gets patched to jump here on failure
   std::vector<Instruction> instructions; // ends in a TAIL_CALL
+};
+
+thread_local InterpreterStateImpl* tls_int_state_ptr_ = nullptr;
+struct TLSCurrentInterpreterGuard {
+  TLSCurrentInterpreterGuard(InterpreterStateImpl* state) {
+    prev_state_ = tls_int_state_ptr_;
+    tls_int_state_ptr_ = state;
+  }
+
+  ~TLSCurrentInterpreterGuard() {
+    tls_int_state_ptr_ = prev_state_;
+  }
+
+ private:
+  InterpreterStateImpl* prev_state_;
 };
 
 struct CodeImpl {
@@ -1044,6 +1060,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
 
     // RecordFunction object associated with this frame
     std::unique_ptr<at::RecordFunction> record_function;
+
     // symbol table for a frame
     ShapeSymbolTable symbols2dims;
   };
@@ -1078,7 +1095,6 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   void enterFrame(const Code& code, size_t base_pointer) {
     frames.emplace_back(Frame{code.pImpl, 0, base_pointer, c10::nullopt});
     registers.resize(registers.size() + code.pImpl->register_size_);
-    // frames.back().function->dump(std::cout);
   }
 
   void leaveFrame() {
@@ -1124,19 +1140,8 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             .code;
     frames.back().pc = af->pc + 1;
     enterFrame(code, stack.size() - code.num_inputs());
-    if (at::hasCallbacks() && at::isRecordFunctionEnabled()) {
-      auto rec_fn = std::make_unique<at::RecordFunction>(
-          at::RecordScope::TORCHSCRIPT_FUNCTION);
-      if (rec_fn->active) {
-        if (rec_fn->needs_inputs) {
-          rec_fn->before(fn->name(), last(stack, code.num_inputs()));
-        } else {
-          rec_fn->before(fn->name());
-        }
-        frames.back().record_function = std::move(rec_fn);
-      }
-    }
     *af = ActiveFrame(frames.back());
+    checkAndStartRecordFunction(frames.back(), stack);
   }
 
   bool runImpl(Stack& stack) {
@@ -1153,6 +1158,10 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     }
 
     ActiveFrame af(frames.back());
+    TLSCurrentInterpreterGuard g(this);
+    if (af.pc == 0) {
+      checkAndStartRecordFunction(frames.back(), stack);
+    }
     try {
       while (true) {
         // std::cout << "RUNNING ";
@@ -1176,10 +1185,12 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             runGraphFunction(stack, &f, &af);
           } break;
           case OP:
+            frames.back().pc = af.pc;
             af.operators[inst.X](&stack);
             ++af.pc;
             break;
           case OPN:
+            frames.back().pc = af.pc;
             stack.push_back(inst.N);
             af.operators[inst.X](&stack);
             ++af.pc;
@@ -1298,6 +1309,8 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
                     jit::last(stack, num_outputs).vec()));
               }
             }
+            // destroy the last frame and call RecordFunction's end callbacks
+            leaveFrame();
             return false;
           case WAIT: {
             auto future = stack.back().toFuture();
@@ -1439,6 +1452,7 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
             leaveFrame();
             enterFrame(code, base_pointer);
             af = ActiveFrame(frames.back());
+            checkAndStartRecordFunction(frames.back(), stack);
           } break;
           case LIST_UNPACK: {
             listUnpack(stack, inst.X);
@@ -1542,6 +1556,42 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
   }
 
   void formatStackTrace(std::ostream& out) {
+    format_stack_trace(out, callstack());
+  }
+
+  void handleError(const ExceptionMessage& msg, bool is_jit_exception) {
+    std::ostringstream ss;
+    ss << "The following operation failed in the TorchScript interpreter.\n";
+    formatStackTrace(ss);
+    ss << "RuntimeError: " << msg << "\n";
+    if (future_) {
+      future_->setError(std::make_exception_ptr(Future::FutureError(ss.str())));
+    } else if (is_jit_exception) {
+      throw JITException(ss.str());
+    } else {
+      throw std::runtime_error(ss.str());
+    }
+  }
+
+  static void checkAndStartRecordFunction(Frame& frame, Stack& stack) {
+    if (!frame.record_function &&
+        at::hasCallbacks() &&
+        at::isRecordFunctionEnabled()) {
+      auto rec_fn = std::make_unique<at::RecordFunction>(
+          at::RecordScope::TORCHSCRIPT_FUNCTION);
+      if (rec_fn->active) {
+        if (rec_fn->needs_inputs) {
+          rec_fn->before(frame.function->function_name_, last(stack, frame.function->n_inputs));
+        } else {
+          rec_fn->before(frame.function->function_name_);
+        }
+        frame.record_function = std::move(rec_fn);
+      }
+    }
+  }
+
+ public:
+  std::vector<StackEntry> callstack() const {
     std::vector<StackEntry> entries;
     for (size_t i = 0; i < frames.size(); ++i) {
       const Frame& frame = frames[i];
@@ -1562,24 +1612,9 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
       }
       entries.emplace_back(StackEntry{previous_fn_name, node->sourceRange()});
     }
-    format_stack_trace(out, entries);
+    return entries;
   }
 
-  void handleError(const ExceptionMessage& msg, bool is_jit_exception) {
-    std::ostringstream ss;
-    ss << "The following operation failed in the TorchScript interpreter.\n";
-    formatStackTrace(ss);
-    ss << "RuntimeError: " << msg << "\n";
-    if (future_) {
-      future_->setError(std::make_exception_ptr(Future::FutureError(ss.str())));
-    } else if (is_jit_exception) {
-      throw JITException(ss.str());
-    } else {
-      throw std::runtime_error(ss.str());
-    }
-  }
-
- public:
   c10::intrusive_ptr<Future> getOrCreateFuture() {
     if (!future_) {
       future_ =
@@ -1610,6 +1645,27 @@ struct InterpreterStateImpl : c10::intrusive_ptr_target {
     }
   }
 };
+
+std::vector<FileLineFunc> currentCallstack() {
+  std::vector<FileLineFunc> entries;
+  if (tls_int_state_ptr_) {
+    auto cs = tls_int_state_ptr_->callstack();
+    entries.reserve(cs.size());
+    std::reverse(cs.begin(), cs.end());
+    for (const auto& entry : cs) {
+      auto& range = entry.range;
+      if (range.source()) {
+        auto& src = range.source();
+        if (src && src->filename()) {
+          auto line = src->starting_line_no() +
+              src->lineno_for_offset(range.start());
+          entries.emplace_back(FileLineFunc{*(src->filename()), line, entry.filename});
+        }
+      }
+    }
+  }
+  return entries;
+}
 
 std::atomic<size_t> InterpreterStateImpl::Frame::num_frames;
 
@@ -1704,5 +1760,6 @@ void InterpreterContinuation::operator()() {
   DistAutogradContainer::forceCurrentContextId(prev_dist_id);
 #endif
 }
+
 } // namespace jit
 } // namespace torch
