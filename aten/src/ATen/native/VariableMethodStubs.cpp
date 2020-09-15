@@ -40,5 +40,9 @@ void retain_grad(const Tensor& self) {
   AT_ERROR("retain_grad is not implemented for Tensor");
 }
 
+Tensor fw_primal(const Tensor& self) {
+    return self.alias();
+}
+
 } // namespace native
 } // namespace at

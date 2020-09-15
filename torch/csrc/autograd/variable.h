@@ -6,6 +6,7 @@
 #include <torch/csrc/autograd/edge.h>
 #include <torch/csrc/autograd/function_hook.h>
 #include <torch/csrc/autograd/cpp_hook.h>
+#include <torch/csrc/autograd/forward_grad.h>
 
 #include <ATen/ATen.h>
 #include <ATen/NamedTensorUtils.h>
@@ -190,6 +191,7 @@ struct TORCH_API AutogradMeta : public c10::AutogradMetaInterface {
   std::string name_;
 
   Variable grad_;
+  ForwardGrad fw_grad_;
   std::shared_ptr<Node> grad_fn_;
   std::weak_ptr<Node> grad_accumulator_;
 
@@ -236,6 +238,16 @@ struct TORCH_API AutogradMeta : public c10::AutogradMetaInterface {
 
   const Variable& grad() const override {
     return grad_;
+  }
+
+  const Variable& fw_grad(uint64_t level) const override {
+    return fw_grad_.value(level);
+  }
+
+  void set_fw_grad(Variable& new_grad, const Variable& self, uint64_t level) override;
+
+  void reset_fw_grad(uint64_t level) override {
+    fw_grad_.reset(level);
   }
 
   AutogradMeta(at::TensorImpl* self_impl = nullptr, bool requires_grad = false, Edge gradient_edge = Edge() ) {

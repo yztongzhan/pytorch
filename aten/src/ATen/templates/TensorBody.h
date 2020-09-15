@@ -552,6 +552,38 @@ class CAFFE2_API Tensor {
     return impl_->grad();
   }
 
+  /// This function returns the forward gradient for this Tensor.
+  /// You can set this value to start computing forward gradients using
+  /// set_fw_grad below.
+  /// The default level will be removed when we add nested levels
+  const Tensor& fw_grad(uint64_t level=0) const {
+    return impl_->fw_grad(level);
+  }
+
+  /// This function returns the forward primal for this Tensor.
+  /// The returned Tensor is a view of the input one that does not
+  /// have a dual at this level.
+  Tensor fw_primal(uint64_t level=0) const {
+    auto result = this->alias();
+    result.reset_fw_grad(level);
+    return result;
+  }
+
+  /// This function can be used to set the value of the forward grad.
+  /// Note that the given value might not be used directly if this Tensor already
+  /// has a forward grad or if it is a view of another Tensor.
+  /// The default level will be removed when we add nested levels
+  void set_fw_grad(Tensor& new_grad, uint64_t level=0) {
+    impl_->set_fw_grad(new_grad, *this, level);
+  }
+
+  /// This function can be used to reset the forward grad to an undefined Tensor.
+  /// The default level will be removed when we add nested levels
+  void reset_fw_grad(uint64_t level=0) {
+    impl_->reset_fw_grad(level);
+  }
+
+
   // STOP.  Thinking of adding a method here, which only makes use
   // of other ATen methods?  Define it in native_functions.yaml.
 
