@@ -131,7 +131,9 @@ if sys.platform == 'win32':
 
 # See Note [Global dependencies]
 def _load_global_deps():
-    if platform.system() == 'Windows':
+    # TODO(torchpy): we use `__file__` here, which is incompatible with libinterpreter's
+    # freezing scheme. Figure out a real alternative.
+    if platform.system() == 'Windows' or sys.executable == 'i_am_torchpy':
         return
 
     lib_name = 'libtorch_global_deps' + ('.dylib' if platform.system() == 'Darwin' else '.so')
@@ -459,7 +461,10 @@ from ._tensor_str import set_printoptions
 ################################################################################
 
 def manager_path():
-    if platform.system() == 'Windows':
+    # TODO(torchpy): we use `__file__` here, which is incompatible with libinterpreter's
+    # freezing scheme. Figure out a real alternative.
+
+    if platform.system() == 'Windows' or sys.executable == 'i_am_torchpy':
         return b""
     path = get_file_path('torch', 'bin', 'torch_shm_manager')
     prepare_multiprocessing_environment(get_file_path('torch'))
@@ -477,9 +482,9 @@ del manager_path
 # is not a good way to fix this problem.  Perhaps, try to redesign VariableFunctions
 # so that this import is good enough
 if TYPE_CHECKING:
-    # Some type signatures pulled in from _VariableFunctions here clash with 
+    # Some type signatures pulled in from _VariableFunctions here clash with
     # signatures already imported. For now these clashes are ignored; see
-    # PR #43339 for details.  
+    # PR #43339 for details.
     from torch._C._VariableFunctions import *  # type: ignore
 
 for name in dir(_C._VariableFunctions):
