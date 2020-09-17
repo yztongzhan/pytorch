@@ -155,6 +155,7 @@ JIT_TO_CPP_DEFAULT = {
     '[]': '{}',
     '[0,1]': '{0,1}',  # TODO: stop special casing
     'contiguous_format': 'MemoryFormat::Contiguous',
+    'long': 'at::kLong',
 }
 
 # Convert a JIT default into C++ expression representing the default
@@ -164,7 +165,7 @@ def default_expr(d: str, t: Type) -> str:
     return JIT_TO_CPP_DEFAULT.get(d, d)
 
 # Convert an argument into its C++ API form
-def argument(a: Union[Argument, TensorOptionsArguments, ThisArgument]) -> CppArgument:
+def to_cpp_argument(a: Union[Argument, TensorOptionsArguments, ThisArgument]) -> CppArgument:
     if isinstance(a, Argument):
         return CppArgument(
             type=argument_type(a),
@@ -194,7 +195,22 @@ def argument(a: Union[Argument, TensorOptionsArguments, ThisArgument]) -> CppArg
     else:
         assert_never(a)
 
-def group_arguments(
+def scattered_arguments(
+    func: FunctionSchema, *, method: bool = False
+) -> Sequence[Union[Argument, TensorOptionsArguments, ThisArgument]]:
+    args: List[Union[Argument, ThisArgument, TensorOptionsArguments]] = []
+    args.extend(func.out_arguments)
+
+    if method:
+        args.extend(ThisArgument(a) if a.name == "self" else a for a in func.arguments)
+    else:
+        args.extend(func.arguments)
+
+    args.extend(func.kwarg_only_arguments)
+
+    return args
+
+def gathered_arguments(
     func: FunctionSchema, *, method: bool = False
 ) -> Sequence[Union[Argument, TensorOptionsArguments, ThisArgument]]:
     args: List[Union[Argument, ThisArgument, TensorOptionsArguments]] = []
@@ -237,5 +253,7 @@ def group_arguments(
     return args
 
 # Convert arguments to C++ API form
-def arguments(func: FunctionSchema, *, method: bool = False) -> Sequence[CppArgument]:
-    return list(map(argument, group_arguments(func, method=method)))
+def scattered_cpp_arguments(func: FunctionSchema, *, method: bool = False) -> Sequence[CppArgument]:
+    return list(map(to_cpp_argument, scattered_arguments(func, method=method)))
+def gathered_cpp_arguments(func: FunctionSchema, *, method: bool = False) -> Sequence[CppArgument]:
+    return list(map(to_cpp_argument, gathered_arguments(func, method=method)))
