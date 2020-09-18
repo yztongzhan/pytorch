@@ -71,12 +71,18 @@ RENAME_TRACE = {
 # arguments (inside of the `native_functions.yaml`)
 RENAME_TRACE_ADD_ARGS = {
     'fill': '''\
-    jit::tracer::addInputs(node, "options", TensorOptions());
+    jit::tracer::addInputs(node, "options", c10::optional<ScalarType>());
+    jit::tracer::addInputs(node, "options", layout_or_default(c10::nullopt));
+    jit::tracer::addInputs(node, "options", device_or_default(c10::nullopt));
+    jit::tracer::addInputs(node, "options", pinned_memory_or_default(c10::nullopt));
     c10::optional<MemoryFormat> memory_format = c10::MemoryFormat::Preserve;
     jit::tracer::addInputs(node, "memory_format", memory_format);
 ''',
     'zero': '''\
-    jit::tracer::addInputs(node, "options", TensorOptions());
+    jit::tracer::addInputs(node, "options", c10::optional<ScalarType>());
+    jit::tracer::addInputs(node, "options", layout_or_default(c10::nullopt));
+    jit::tracer::addInputs(node, "options", device_or_default(c10::nullopt));
+    jit::tracer::addInputs(node, "options", pinned_memory_or_default(c10::nullopt));
     c10::optional<MemoryFormat> memory_format = c10::MemoryFormat::Preserve;
     jit::tracer::addInputs(node, "memory_format", memory_format);
 ''',
@@ -495,26 +501,32 @@ def format_trace_op_name(declaration):
 def format_trace_inputs(declaration):
     def dispatch_trace_input(arg_spec):
         name, value, simple_type, nullable = arg_spec
-        if declaration['use_c10_dispatcher'] == 'full':
-            if value == "options":
-                value = "TensorOptions().dtype(dtype).layout(layout).device(device).pinned_memory(pin_memory)"
-        else:
-            assert declaration['use_c10_dispatcher'] == 'with_codegenerated_unboxing_wrapper'
         # XXX: For arg that have type of Tensor?[], tracer will pass allow_undefined to addInputs
         if simple_type == 'TensorList' and nullable:
             return '''jit::tracer::addInputs(node, "{}", {}, {});'''.format(name, value, "true")
         else:
-            return ADD_TRACE_INPUT.substitute(name=name, input=value)
+            if value == "options":
+                result = ""
+                result += ADD_TRACE_INPUT.substitute(name=name, input="optTypeMetaToScalarType(options.dtype_opt())") + "\n"
+                result += ADD_TRACE_INPUT.substitute(name=name, input="options.layout()") + "\n"
+                result += ADD_TRACE_INPUT.substitute(name=name, input="options.device()") + "\n"
+                result += ADD_TRACE_INPUT.substitute(name=name, input="options.pinned_memory()")
+                return result
+            else:
+                return ADD_TRACE_INPUT.substitute(name=name, input=value)
 
-    trace_inputs = declaration['arguments']
+    if declaration['use_c10_dispatcher'] == 'full':
+        trace_inputs = declaration['schema_order_arguments']
+        trace_input_spec = [(i['name'], i['name'], i['type'], i.get('is_nullable')) for i in trace_inputs]
+    else:
+        trace_inputs = declaration['arguments']
+        trace_input_spec = [(i['name'], i['name'], i['simple_type'], i.get('is_nullable')) for i in trace_inputs]
 
     if is_out_overload(declaration):
         # *_out functions take the result as a first argument, but they are the
         # last argument in the JIT schema.
         out_input = trace_inputs[0]
         trace_inputs = trace_inputs[1:]
-
-    trace_input_spec = [(i['name'], i['name'], i['simple_type'], i.get('is_nullable')) for i in trace_inputs]
 
     trace_inputs = \
         '\n'.join(dispatch_trace_input(arg_spec) for arg_spec in trace_input_spec)
@@ -523,11 +535,6 @@ def format_trace_inputs(declaration):
         # for *_out functions, handle the result argument differently for inplace/outplace.
         # For inplace: just add the input to the end to confirm with the JIT schema
         value = out_input['name']
-        if declaration['use_c10_dispatcher'] == 'full':
-            if value == "options":
-                value = "TensorOptions().dtype(dtype).layout(layout).device(device).pinned_memory(pin_memory)"
-        else:
-            assert declaration['use_c10_dispatcher'] == 'with_codegenerated_unboxing_wrapper'
         inplace = ADD_TRACE_INPUT.substitute(name=out_input['name'], input=value)
 
         # for outplace: do nothing, except if the declaration is a factory.
@@ -536,7 +543,11 @@ def format_trace_inputs(declaration):
         trace_name = uninplace_api_name(declaration['api_name'])
         has_factory_name = trace_name in FACTORY_FUNCTION_NAMES
         if has_factory_name:
-            outplace = ADD_TRACE_INPUT.substitute(name='out', input='out.options()')
+            outplace = ""
+            outplace += ADD_TRACE_INPUT.substitute(name='out', input='optTypeMetaToScalarType(out.options().dtype_opt())') + "\n"
+            outplace += ADD_TRACE_INPUT.substitute(name='out', input='out.options().layout()') + "\n"
+            outplace += ADD_TRACE_INPUT.substitute(name='out', input='out.options().device()') + "\n"
+            outplace += ADD_TRACE_INPUT.substitute(name='out', input='out.options().pinned_memory()')
         else:
             outplace = ''
 
