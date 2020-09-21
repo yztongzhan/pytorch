@@ -21,16 +21,12 @@ namespace {
 const std::string kSocketIfnameEnvVar = "TP_SOCKET_IFNAME";
 const std::string kDefaultUvAddress = "127.0.0.1";
 
-constexpr long kToMilliseconds = 1000;
-
 const std::string kGilAverageWaitTime = "agent.gil_average_wait_time_us";
 const std::string kThreadPoolSize = "agent.thread_pool_size";
 const std::string kNumIdleThreads = "agent.num_idle_threads";
 const std::string kClientActiveCalls = "agent.client_active_calls";
 const std::string kServerActiveCalls = "agent.server_active_calls";
 const std::string kServerActiveAsyncCalls = "agent.server_active_async_calls";
-const std::string kRpcTimeoutErrorStr =
-    "RPC ran for more than set timeout ({} ms) and will now be marked with an error";
 
 inline void checkCPUTensor(const torch::Tensor& tensor) {
   TORCH_CHECK(
