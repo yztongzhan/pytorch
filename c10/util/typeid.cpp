@@ -14,42 +14,60 @@ namespace detail {
 C10_EXPORT void _ThrowRuntimeTypeLogicError(const string& msg) {
   // In earlier versions it used to be std::abort() but it's a bit hard-core
   // for a library
-  AT_ERROR(msg);
+  TORCH_CHECK(false, msg);
 }
-
-
 } // namespace detail
 
-template <>
-EXPORT_IF_NOT_GCC const detail::TypeMetaData* TypeMeta::_typeMetaDataInstance<
-    detail::_Uninitialized>() noexcept {
-  static constexpr detail::TypeMetaData singleton = detail::TypeMetaData(
-      0,
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      nullptr,
-      TypeIdentifier::uninitialized(),
-      "nullptr (uninitialized)");
-  return &singleton;
+//
+// TypeMetaData instances for ScalarType types.
+// TypeMeta values for T will contain T's index,
+// equal to the ScalarType enum value for T.
+//
+const detail::TypeMetaData& TypeMeta::scalarTypeMetaData(uint16_t index) {
+  static const detail::TypeMetaData instances[NumScalarTypes] = {
+#define SCALAR_TYPE_META(T, name) \
+    /* ScalarType::name */ \
+    detail::TypeMetaData( \
+      sizeof(T), \
+      detail::_PickNew<T>(), \
+      detail::_PickPlacementNew<T>(), \
+      detail::_PickCopy<T>(), \
+      detail::_PickPlacementDelete<T>(), \
+      detail::_PickDelete<T>(), \
+      TypeIdentifier::Get<T>(), \
+      c10::util::get_fully_qualified_type_name<T>()),
+AT_FORALL_SCALAR_TYPES_WITH_COMPLEX_AND_QINTS(SCALAR_TYPE_META)
+#undef SCALAR_TYPE_META
+    // ScalarType::Undefined
+    detail::TypeMetaData(
+        0,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        nullptr,
+        TypeIdentifier::uninitialized(),
+        "nullptr (uninitialized)")
+  };
+  return instances[index];
 }
 
-CAFFE_KNOWN_TYPE(uint8_t)
-CAFFE_KNOWN_TYPE(int8_t)
-CAFFE_KNOWN_TYPE(int16_t)
-CAFFE_KNOWN_TYPE(int)
-CAFFE_KNOWN_TYPE(int64_t)
-CAFFE_KNOWN_TYPE(at::Half)
-CAFFE_KNOWN_TYPE(float)
-CAFFE_KNOWN_TYPE(double)
-CAFFE_KNOWN_TYPE(c10::complex<c10::Half>)
-CAFFE_KNOWN_TYPE(c10::complex<float>)
-CAFFE_KNOWN_TYPE(c10::complex<double>)
-// 11 = undefined type id
-// 12 = Tensor (defined in tensor.cc)
+// see TypeMeta::addTypeMetaDataInstance
+std::mutex TypeMeta::appendMutex_;
+
+//
+// TypeMetaData instances for non-ScalarType types.
+// Conceptually this is the second chunk of a single array of instances
+// that begins with the scalarTypeMetaDataInstances.
+// CAFFE_KNOWN_TYPE(T) adds a TypeMetaData entry for T to this vector,
+// and TypeMeta values for T will contain the entry's upshifted index.
+//
+std::vector<detail::TypeMetaData>& TypeMeta::nonScalarTypeMetaDatas() {
+  static std::vector<detail::TypeMetaData> instances;
+  return instances;
+}
+
 CAFFE_KNOWN_TYPE(std::string)
-CAFFE_KNOWN_TYPE(bool)
 CAFFE_KNOWN_TYPE(uint16_t)
 CAFFE_KNOWN_TYPE(char)
 CAFFE_KNOWN_TYPE(std::unique_ptr<std::mutex>)
@@ -79,14 +97,11 @@ using _guard_long_unique = std::conditional_t<
     _guard_long_unique_dummy<T>,
     T>;
 } // namespace detail
+
 CAFFE_KNOWN_TYPE(detail::_guard_long_unique<long>);
 CAFFE_KNOWN_TYPE(detail::_guard_long_unique<std::vector<long>>)
 
 CAFFE_KNOWN_TYPE(float*)
 CAFFE_KNOWN_TYPE(at::Half*)
-CAFFE_KNOWN_TYPE(c10::qint8)
-CAFFE_KNOWN_TYPE(c10::quint8)
-CAFFE_KNOWN_TYPE(c10::qint32)
-CAFFE_KNOWN_TYPE(at::BFloat16)
 
 } // namespace caffe2
