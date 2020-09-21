@@ -315,6 +315,30 @@ class DistributedDataParallel(Module):
                          are getting different gradients, which should not
                          happen if DistributedDataParallel is correctly used.
                          (default: ``False``)
+        parameters_to_ignore (List[torch.nn.Parameter]): Parameters that should
+                                                         not be part of any
+                                                         synchronization in DDP,
+                                                         i.e. these parameters
+                                                         are entirely ignored in
+                                                         DDP logic. For example,
+                                                         if it is known that
+                                                         certain model parameters
+                                                         will not be used at all
+                                                         during training, or you
+                                                         want to handle gradient
+                                                         synchronization for
+                                                         certain parameters in a
+                                                         custom manner, then
+                                                         those parameters can be
+                                                         passed into this argument
+                                                         instead of setting
+                                                         ``find_unused_parameters=True``.
+                                                         In this case, performance
+                                                         is improved since using
+                                                         ``find_unused_parameters=True``
+                                                         would incur an extra autograd
+                                                         graph traversal every iteration.
+
 
     Attributes:
         module (Module): the module to be parallelized
@@ -329,7 +353,8 @@ class DistributedDataParallel(Module):
                  process_group=None,
                  bucket_cap_mb=25,
                  find_unused_parameters=False,
-                 check_reduction=False):
+                 check_reduction=False,
+                 parameters_to_ignore=None):
 
         super(DistributedDataParallel, self).__init__()
 
@@ -380,6 +405,7 @@ class DistributedDataParallel(Module):
         self.require_backward_grad_sync = True
         self.require_forward_param_sync = True
         self.ddp_join_enabled = False
+        self.parameters_to_ignore = parameters_to_ignore if parameters_to_ignore is not None else []
 
         if check_reduction:
             # This argument is no longer used since the reducer
@@ -399,7 +425,21 @@ class DistributedDataParallel(Module):
         self._ddp_init_helper()
 
     def _sync_params_and_buffers(self, authoritative_rank=0):
-        module_states = list(self.module.state_dict().values())
+        if not self.parameters_to_ignore:
+            # Broadcast state dict if no parameters to ignore, otherwise filter out
+            # ignored parameters before broadcasting.
+            module_states = list(self.module.state_dict().values())
+        else:
+            module_states = []
+            # Have to use data ptrs since direct "is" comparison on the tensors
+            # won't work.
+            params_to_ignore_data_ptrs = set(
+                t.data_ptr() for t in self.parameters_to_ignore
+            )
+            for tensor in self.module.state_dict().values():
+                if tensor.data_ptr() not in params_to_ignore_data_ptrs:
+                    module_states.append(tensor)
+
         if len(module_states) > 0:
             self._distributed_broadcast_coalesced(
                 module_states,
@@ -468,15 +508,22 @@ class DistributedDataParallel(Module):
         self.modules_params = [list(parameters(m)) for m in self._module_copies]
         self.modules_buffers = [list(m.buffers()) for m in self._module_copies]
 
+        def _should_ignore_param(p):
+            return any(p is ignore for ignore in self.parameters_to_ignore)
+
         # Build tuple of (module, parameter) for all parameters that require grads.
         modules_and_parameters = [
             [
                 (module, parameter)
                 for module in replica.modules()
-                for parameter in filter(
-                    lambda parameter: parameter.requires_grad,
-                    parameters(module, recurse=False))
-            ] for replica in self._module_copies]
+                for parameter in [
+                    param
+                    for param in parameters(module, recurse=False)
+                    if param.requires_grad and not _should_ignore_param(param)
+                ]
+            ]
+            for replica in self._module_copies
+        ]
 
         # Build list of parameters.
         parameters = [
