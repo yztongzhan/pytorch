@@ -7,7 +7,7 @@ import torch.utils.hooks as hooks
 import warnings
 import weakref
 from torch._C import _add_docstr
-from typing import Any, Dict, List, Tuple, Union
+from typing import Any, Dict, Tuple, Union
 from numbers import Number
 import functools
 from typing import Optional
@@ -75,7 +75,7 @@ class Tensor(torch._C._TensorBase):
                         self._backward_hooks)
                 else:
                     new_tensor = self.new()
-                    new_tensor.set_(new_storage, self.storage_offset(), self.size(), self.stride()) # type: ignore[attr-defined]
+                    new_tensor.set_(new_storage, self.storage_offset(), self.size(), self.stride())  # type: ignore[attr-defined]
                     new_tensor.requires_grad = self.requires_grad
             memo[id(self)] = new_tensor
             return new_tensor
@@ -160,7 +160,7 @@ class Tensor(torch._C._TensorBase):
             raise RuntimeError('__setstate__ can be only called on leaf Tensors')
         if len(state) == 4:
             # legacy serialization of Tensor
-            self.set_(*state) # type: ignore[attr-defined]
+            self.set_(*state)  # type: ignore[attr-defined]
             return
         elif len(state) == 5:
             # legacy serialization of Variable
@@ -523,7 +523,7 @@ class Tensor(torch._C._TensorBase):
     __rtruediv__ = __rdiv__
     __itruediv__ = _C._TensorBase.__idiv__
 
-    __pow__ = _C._TensorBase.__pow__ 
+    __pow__ = _C._TensorBase.pow
 
     def __format__(self, format_spec):
         relevant_args = (self,)
@@ -534,7 +534,7 @@ class Tensor(torch._C._TensorBase):
             return self.item().__format__(format_spec)
         return object.__format__(self, format_spec)
 
-    def __ipow__(self, other):
+    def __ipow__(self, other):  # type: ignore
         relevant_args = (self, other)
         from torch.overrides import has_torch_function, handle_torch_function
         if type(self) is not Tensor and type(other) is not Tensor and has_torch_function(relevant_args):
@@ -659,7 +659,7 @@ class Tensor(torch._C._TensorBase):
             return handle_torch_function(Tensor.__contains__, relevant_args, self, element)
         if isinstance(element, (torch.Tensor, Number)):
             # type hint doesn't understand the __contains__ result array
-            return (element == self).any().item() # type: ignore[union-attr]
+            return (element == self).any().item()  # type: ignore[union-attr]
 
         raise RuntimeError(
             "Tensor.__contains__ only supports Tensor or scalar, but you passed in a %s." %
@@ -676,7 +676,7 @@ class Tensor(torch._C._TensorBase):
         relevant_args = (self,)
         from torch.overrides import has_torch_function, handle_torch_function
         if type(self) is not Tensor and has_torch_function(relevant_args):
-            return handle_torch_function(Tensor.__cuda_array_interface__.__get__, relevant_args, self) #type: ignore[attr-defined]
+            return handle_torch_function(Tensor.__cuda_array_interface__.__get__, relevant_args, self)  # type: ignore[attr-defined]
 
         # raise AttributeError for unsupported tensors, so that
         # hasattr(cpu_tensor, "__cuda_array_interface__") is False.
@@ -943,7 +943,7 @@ class Tensor(torch._C._TensorBase):
         relevant_args = (self,)
         from torch.overrides import has_torch_function, handle_torch_function
         if type(self) is not Tensor and has_torch_function(relevant_args):
-            return handle_torch_function(Tensor.grad.__get__, relevant_args, self) #type: ignore[attr-defined]
+            return handle_torch_function(Tensor.grad.__get__, relevant_args, self)  # type: ignore[attr-defined]
 
         if self.requires_grad and not hasattr(self, "retains_grad") and not self.is_leaf and self._grad is None:
             warnings.warn("The .grad attribute of a Tensor that is not a leaf Tensor is being accessed. Its .grad "
@@ -958,7 +958,7 @@ class Tensor(torch._C._TensorBase):
         relevant_args = (self,)
         from torch.overrides import has_torch_function, handle_torch_function
         if type(self) is not Tensor and has_torch_function(relevant_args):
-            return handle_torch_function(Tensor.grad.__set__, relevant_args, self, new_grad) #type: ignore[attr-defined]
+            return handle_torch_function(Tensor.grad.__set__, relevant_args, self, new_grad)  # type: ignore[attr-defined]
         self._grad = new_grad
 
     @grad.deleter
@@ -966,7 +966,7 @@ class Tensor(torch._C._TensorBase):
         relevant_args = (self,)
         from torch.overrides import has_torch_function, handle_torch_function
         if type(self) is not Tensor and has_torch_function(relevant_args):
-            return handle_torch_function(Tensor.grad.__delete__, relevant_args, self) #type: ignore[attr-defined]
+            return handle_torch_function(Tensor.grad.__delete__, relevant_args, self)  # type: ignore[attr-defined]
         del self._grad
 
     @classmethod
