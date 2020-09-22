@@ -83,7 +83,7 @@ blocklist = [
     'stft',
     'istft',
     'tensordot',
-    'norm',
+    'split',
     'unique_consecutive',
     'atleast_1d',
     'atleast_2d',
@@ -573,6 +573,10 @@ def gen_pyi(declarations_path, out):
                ],
         'item': ["def item(self) -> Number: ..."],
         'copy_': ["def copy_(self, src: Tensor, non_blocking: _bool=False) -> Tensor: ..."],
+        'set_': ['def set_(self, storage: Storage, offset: _int, size: Size, stride: Tuple[_int]) -> Tensor: ...',
+                 'def set_(self, storage: Storage) -> Tensor: ...'],
+        'split': ['def split(self, split_size: _int, dim: _int=0) -> Union[Tuple[Tensor, ...], List[Tensor]]: ...',
+                  'def split(self, split_size: Tuple[_int], dim: _int=0) -> Union[Tuple[Tensor, ...], List[Tensor]]: ...'],
     })
     for binop in ['mul', 'div', 'true_divide', 'floor_divide']:
         for inplace in [False, True]:
